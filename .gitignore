@@ -1,0 +1,79 @@
+# General / OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# Editor / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.vs/
+.project
+.settings/
+
+# Logs and temporary files
+*.log
+*.sqlite
+/tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
+.venv
+venv/
+ENV/
+env.bak/
+venv.bak/
+.pytest_cache/
+.coverage
+htmlcov/
+Pipfile.lock
+poetry.lock
+
+# Go
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.dylib
+
+# Test binary, builtin with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Shell / Scripts
+*.sh.out
+*.sh.err
