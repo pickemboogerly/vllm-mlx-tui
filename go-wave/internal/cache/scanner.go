@@ -7,17 +7,19 @@ import (
 )
 
 // ListCachedModels scans the HuggingFace cache directory for models.
+// Returns an empty slice if no models are found; the caller is responsible
+// for handling the empty case gracefully (L6: no fake fallback models).
 func ListCachedModels() []string {
 	var models []string
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return defaultModels()
+		return models
 	}
 
 	cacheDir := filepath.Join(home, ".cache", "huggingface", "hub")
 	entries, err := os.ReadDir(cacheDir)
 	if err != nil {
-		return defaultModels()
+		return models
 	}
 
 	for _, entry := range entries {
@@ -28,17 +30,5 @@ func ListCachedModels() []string {
 		}
 	}
 
-	if len(models) == 0 {
-		return defaultModels()
-	}
-
 	return models
-}
-
-func defaultModels() []string {
-	return []string{
-		"mlx-community/Meta-Llama-3-8B-Instruct-4bit",
-		"mlx-community/Mistral-7B-Instruct-v0.2-4bit",
-		"mlx-community/Phi-3-mini-4k-instruct-4bit",
-	}
 }

@@ -8,6 +8,7 @@ from textual.widgets import Header, Footer, Input, Static
 from textual.containers import VerticalScroll, Horizontal, Vertical
 from textual import work
 from rich.markdown import Markdown
+from rich.text import Text as RichText
 from .metrics import MetricsPane
 from ..server import ServerManager
 
@@ -65,7 +66,7 @@ class ChatScreen(Screen):
         color: $text-muted;
     }
     """
-    
+
     def __init__(self, manager: ServerManager, model_id: str, **kwargs):
         super().__init__(**kwargs)
         self.manager = manager
@@ -86,6 +87,8 @@ class ChatScreen(Screen):
         yield Footer()
 
     def action_quit(self):
+        if self.manager:
+            self.manager.stop()
         self.app.exit()
 
     def action_copy_text(self):
@@ -100,9 +103,15 @@ class ChatScreen(Screen):
 
     def on_mount(self):
         self.memory_poller = self.set_interval(2.0, self.update_memory)
-        # Greet user
-        self.query_one("#chat-scroll").mount(Static(Markdown(f"**System:** Successfully connected to loaded model `{self.model_id}`."), classes="msg-assistant"))
-        
+        # H5: system greeting uses RichText (not Markdown) to avoid markup injection
+        greeting = RichText()
+        greeting.append("System: ", style="bold")
+        greeting.append(f"Successfully connected to loaded model ")
+        greeting.append(self.model_id, style="italic")
+        self.query_one("#chat-scroll").mount(
+            Static(greeting, classes="msg-assistant")
+        )
+
     def update_memory(self):
         if self.manager:
             mem = self.manager.get_memory_usage()
@@ -110,64 +119,77 @@ class ChatScreen(Screen):
 
     @work(exclusive=True)
     async def request_completion(self, prompt: str):
+        input_widget = self.query_one("#input-box", Input)
         chat_scroll = self.query_one("#chat-scroll")
-        
-        # User message
-        self.messages.append({"role": "user", "content": prompt})
-        await chat_scroll.mount(Static(Markdown(f"**User:** {prompt}"), classes="msg-user"))
-        
-        # Assistant placeholder
-        assistant_md = Static(Markdown("**Assistant:** "), classes="msg-assistant")
-        await chat_scroll.mount(assistant_md)
-        chat_scroll.scroll_end(animate=False)
-        
-        self.messages.append({"role": "assistant", "content": ""})
-        
-        start_time = time.time()
-        tokens = 0
+
+        # H3: Disable input widget for the duration of generation
+        input_widget.disabled = True
+
         try:
-            async with httpx.AsyncClient() as client:
-                payload = {
-                    "model": self.model_id,
-                    "messages": self.messages,
-                    "stream": True,
-                }
-                # Connect to dynamically configured port
-                port = self.manager.port if self.manager else 8000
-                async with aconnect_sse(
-                    client, "POST", f"http://127.0.0.1:{port}/v1/chat/completions", json=payload
-                ) as event_source:
-                    async for sse in event_source.aiter_sse():
-                        if sse.data == "[DONE]":
-                            break
-                        try:
-                            data = json.loads(sse.data)
-                            delta = data["choices"][0]["delta"].get("content", "")
-                            self.messages[-1]["content"] += delta
-                            tokens += 1
-                            
-                            # Re-render markdown
-                            # Doing this per-token can be slightly expensive but looks great
-                            assistant_md.update(Markdown(f"**Assistant:** {self.messages[-1]['content']}"))
-                            chat_scroll.scroll_end(animate=False)
-                            
-                            elapsed = time.time() - start_time
-                            if elapsed > 0:
-                                tps = tokens / elapsed
-                                self.query_one("#metrics", MetricsPane).tokens_s = f"{tps:.1f} t/s"
-                                
-                        except Exception as loop_e:
-                            pass
-        except Exception as e:
-            # Reattach broken messages
-            assistant_md.update(Markdown(f"**System:** [Connection reset or error: {str(e)}]"))
-            
-        # Clear input box cleanly when done
-        self.query_one("#input-box", Input).value = ""
+            # H5: User message rendered as RichText (plain), not Markdown,
+            # so user-supplied content cannot inject markup or Markdown syntax.
+            user_text = RichText()
+            user_text.append("User: ", style="bold")
+            user_text.append(prompt)
+            self.messages.append({"role": "user", "content": prompt})
+            await chat_scroll.mount(Static(user_text, classes="msg-user"))
+
+            # Assistant placeholder
+            assistant_md = Static(Markdown("**Assistant:** "), classes="msg-assistant")
+            await chat_scroll.mount(assistant_md)
+            chat_scroll.scroll_end(animate=False)
+
+            self.messages.append({"role": "assistant", "content": ""})
+
+            start_time = time.time()
+            tokens = 0
+            try:
+                async with httpx.AsyncClient() as client:
+                    payload = {
+                        "model": self.model_id,
+                        "messages": self.messages,
+                        "stream": True,
+                    }
+                    port = self.manager.port if self.manager else 8000
+                    async with aconnect_sse(
+                        client, "POST", f"http://127.0.0.1:{port}/v1/chat/completions", json=payload
+                    ) as event_source:
+                        async for sse in event_source.aiter_sse():
+                            if sse.data == "[DONE]":
+                                break
+                            try:
+                                data = json.loads(sse.data)
+                                delta = data["choices"][0]["delta"].get("content", "")
+                                self.messages[-1]["content"] += delta
+                                tokens += 1
+
+                                # Re-render markdown for assistant (AI content is trusted)
+                                assistant_md.update(Markdown(f"**Assistant:** {self.messages[-1]['content']}"))
+                                chat_scroll.scroll_end(animate=False)
+
+                                elapsed = time.time() - start_time
+                                if elapsed > 0:
+                                    tps = tokens / elapsed
+                                    self.query_one("#metrics", MetricsPane).tokens_s = f"{tps:.1f} t/s"
+
+                            except Exception as loop_e:
+                                # L4: log SSE parse errors instead of silently swallowing them
+                                self.log.warning(f"SSE parse error: {loop_e}")
+            except Exception as e:
+                # H5: Error text rendered as RichText to prevent server-controlled
+                # content from injecting Markdown/markup syntax.
+                err_text = RichText()
+                err_text.append("System: Connection error: ", style="bold red")
+                err_text.append(str(e), style="red")
+                assistant_md.update(err_text)
+
+        finally:
+            # H3: Always re-enable input, even if an exception occurred
+            input_widget.value = ""
+            input_widget.disabled = False
 
     def on_input_submitted(self, event: Input.Submitted):
         prompt = event.value.strip()
-        if prompt:
-            # visual locking mechanism
-            self.query_one("#input-box", Input).value = "... generating ..."
+        # H3: Don't submit if input is disabled (generation in progress)
+        if prompt and not self.query_one("#input-box", Input).disabled:
             self.request_completion(prompt)
