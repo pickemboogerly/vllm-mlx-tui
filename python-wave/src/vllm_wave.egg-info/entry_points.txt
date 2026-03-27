@@ -1,0 +1,2 @@
+[console_scripts]
+vllm-wave = vllm_wave.__main__:main
