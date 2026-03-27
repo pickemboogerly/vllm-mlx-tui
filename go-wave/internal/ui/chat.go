@@ -221,7 +221,7 @@ func (m *ChatModel) renderMarkdown(input string, width int) string {
 	// H4: reuse renderer if width hasn't changed
 	if m.mdRenderer == nil || m.mdRendererWidth != width {
 		r, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStandardStyle("dark"),
 			glamour.WithWordWrap(width),
 		)
 		if err != nil {
