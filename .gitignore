@@ -77,3 +77,13 @@ go.work.sum
 # Shell / Scripts
 *.sh.out
 *.sh.err
+
+# Project Specific
+.gemini/
+boot_log.txt
+*.log
+profiles.json
+sessions/
+.env
+.env.local
+.env.*.local
