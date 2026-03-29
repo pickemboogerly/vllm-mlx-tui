@@ -34,7 +34,7 @@
         - Max Output Tokens (Applies instantly to next message)
     - Chat Management
     - New Chat Button
-    - Chat list history List (Reads from JSON files in `~/.cache/vllm-wave/chats/`)
+    - Chat list history List (Reads from JSON files in `~/.cache/vllm-mlx-tui/chats/`)
         - chat name
     - Rename Chat
     - Delete Chat

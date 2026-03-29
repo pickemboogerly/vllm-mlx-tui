@@ -166,7 +166,7 @@ dtype: float16
 ### Storage
 
 ```
-~/.vllm-tui/profiles/
+~/.vllm-mlx-tui/profiles/
 ```
 
 ---

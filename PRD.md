@@ -1,4 +1,4 @@
-# Product Requirements Document: vLLM-wave
+# Product Requirements Document: vllm-mlx-tui
 
 **Version:** 0.1.0 (as of codebase)  
 **Purpose:** Single reference for current behavior, constraints, and intentional gaps—useful for refactors and roadmap work without re-deriving behavior from code.
@@ -7,17 +7,13 @@
 
 ## 1. Product overview
 
-**vLLM-wave** is a Python terminal application that:
+**vllm-mlx-tui** is a Python terminal application that:
 
 1. Helps users pick a locally cached Hugging Face model (MLX / safetensors layout), configure a few runtime options, and start **`vllm-mlx serve`** as a **subprocess** (weights do not load in the UI process).
 2. Waits until the OpenAI-compatible **`GET /v1/models`** endpoint responds on the correct client URL for the configured bind host.
 3. Hands off to a **Textual chat UI** that talks to the server over HTTP with **`httpx`** only (streaming chat completions), keeping the launcher process lighter during long sessions.
 
 **Out of scope (today):** Serving GGUF-only weights with `vllm-mlx` (explicitly unsupported upstream); embedding the inference engine inside the TUI process.
-
-### 1.1 Historical Note: Go Implementation
-
-An earlier implementation of vLLM-wave was attempted in Go (`go-wave`) using Bubble Tea. This has been officially **deprecated as a failed experiment** due to complex concurrency, race conditions, and stability issues related to polling the background server within the TUI event loop. The project has fully pivoted to the Python (`python-wave`) implementation using Textual, which is the canonical version documented here.
 
 ---
 
@@ -27,7 +23,7 @@ An earlier implementation of vLLM-wave was attempted in Go (`go-wave`) using Bub
 |------|--------|
 | Discover models from local HF Hub cache | Primary path: `huggingface_hub.scan_cache_dir`; fallback: `find` for `*/snapshots/*/config.json`. |
 | Safe local defaults | Default bind `127.0.0.1`; client URL maps `0.0.0.0` / `::` to loopback for checks and chat. |
-| Observable startup | vLLM stderr streamed into a boot log in the launcher TUI; copy boot log (`c`) and file fallback under `~/.cache/vllm-wave/boot_log.txt`. |
+| Observable startup | vLLM stderr streamed into a boot log in the launcher TUI; copy boot log (`c`) and file fallback under `~/.cache/vllm-mlx-tui/boot_log.txt`. |
 | Usable chat UX | Multi-session sidebar, streaming replies, optional system prompt per chat, markdown rendering, copy selection, switch model without restarting the whole CLI. |
 | Scriptable path | `--no-tui` pipeline for CI/automation with the same boot semantics. |
 
@@ -45,7 +41,7 @@ An earlier implementation of vLLM-wave was attempted in Go (`go-wave`) using Bub
 
 ### 4.1 Launcher wizard (Textual)
 
-**Entry:** `python -m vllm_wave`, `vllm-wave`, or `./start_ai_tui.sh`.
+**Entry:** `python -m vllm_mlx_tui`, `vllm-mlx-tui`, or `./start_ai_tui.sh`.
 
 **Capabilities:**
 
@@ -164,7 +160,7 @@ An earlier implementation of vLLM-wave was attempted in Go (`go-wave`) using Bub
 
 Use this section for backlog items; verify against code before implementing.
 
-- **Split packages:** `vllm_wave.server` (spawn + readiness), `vllm_wave.cache`, `vllm_wave.tui.launcher`, `vllm_wave.tui.chat`, `vllm_wave.cli`.
+- **Split packages:** `vllm_mlx_tui.server` (spawn + readiness), `vllm_mlx_tui.cache`, `vllm_mlx_tui.tui.launcher`, `vllm_mlx_tui.tui.chat`, `vllm_mlx_tui.cli`.
 - **Tests:** Expand integration tests (mocked subprocess), cache label edge cases, chat stream parser.
 - **Chat transcript:** Incremental markdown updates or block-based UI to avoid full-document reparses.
 - **Accessibility:** Footer hints and binding discoverability for copy/switch model.
@@ -175,4 +171,4 @@ Use this section for backlog items; verify against code before implementing.
 ## 11. Document maintenance
 
 - Update this PRD when user-visible behavior, CLI, or env contract changes.
-- **Source of truth:** `vllm_wave/*.py`, `README.md`, and `tests/`—if the PRD disagrees with code, treat code as authoritative until the doc is fixed.
+- **Source of truth:** `vllm_mlx_tui/*.py`, `README.md`, and `tests/`—if the PRD disagrees with code, treat code as authoritative until the doc is fixed.
