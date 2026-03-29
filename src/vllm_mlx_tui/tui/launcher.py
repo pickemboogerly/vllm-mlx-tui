@@ -17,7 +17,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, ScrollableContainer, Vertical
-from textual.screen import Screen
+import textual.screen
 from textual.widgets import (
     Button,
     Checkbox,
@@ -40,20 +40,22 @@ from .statusbar import StatusBar
 _BOOT_LOG_PATH = Path.home() / ".cache" / "vllm-mlx-tui" / "boot_log.txt"
 
 
-class LauncherScreen(Screen):
+class LauncherScreen(textual.screen.Screen):
     """Model selection + configuration wizard."""
 
     BINDINGS = [
-        Binding("enter,ctrl+b", "boot", "Boot Server", show=True),
-        Binding("ctrl+s", "save_profile", "Save Profile", show=True),
-        Binding("ctrl+c", "copy_log", "Copy Log", show=True),
-        Binding("ctrl+m", "show_metrics", "Metrics", show=True),
-        Binding("f1,ctrl+h", "show_help", "Help", show=True),
+        Binding("enter", "launch_server", "🚀 Launch"),
+        Binding("ctrl+c", "copy_log", "Copy Log"),
+        Binding("ctrl+b", "view_boot_server", "Boot Server"),
+        Binding("ctrl+s", "save_profile", "Save Profile"),
+        Binding("ctrl+m", "view_metrics", "Metrics"),
+        Binding("f1", "app.show_help", "Help Reference"),
+        Binding("ctrl+q", "app.quit_app", "Exits"),
     ]
 
     CSS = """
     LauncherScreen {
-        background: #0d1117;
+        background: $background;
         layout: vertical;
     }
 
@@ -65,7 +67,7 @@ class LauncherScreen(Screen):
     #left-panel {
         width: 1fr;
         min-width: 40;
-        border-right: solid #30363d;
+        border-right: solid $border;
         layout: vertical;
         padding: 0;
     }
@@ -80,9 +82,17 @@ class LauncherScreen(Screen):
         height: auto;
         min-height: 7;
         padding: 0 1 1 1;
-        border-top: solid #30363d;
-        background: #0d1117;
+        border-top: solid $border;
+        background: transparent;
         layout: vertical;
+    }
+    #options-grid {
+        height: auto;
+        layout: horizontal;
+    }
+    #options-grid .column {
+        width: 1fr;
+        padding-right: 2;
     }
     #right-panel {
         width: 36;
@@ -93,50 +103,51 @@ class LauncherScreen(Screen):
     /* ---- Section headers ---- */
     .section-title {
         text-style: bold;
-        color: #58a6ff;
+        color: $primary;
         padding: 1 0 0 0;
     }
 
     /* ---- Model table ---- */
     #model-table {
         height: 10;
-        border: solid #30363d;
+        border: solid $border;
         margin-bottom: 1;
     }
     DataTable > .datatable--header {
-        background: #1c2128;
-        color: #8b949e;
+        background: transparent;
+        color: $text-muted;
         text-style: bold;
     }
     DataTable > .datatable--cursor {
-        background: #1f4068;
-        color: #e6edf3;
+        background: transparent;
+        border: solid $primary;
+        color: $text;
     }
 
     /* ---- Inputs ---- */
     .field-label {
-        color: #8b949e;
+        color: $text-muted;
         padding-top: 1;
     }
     Input {
-        border: solid #30363d;
-        background: #161b22;
-        color: #e6edf3;
+        border: solid $border;
+        background: transparent;
+        color: $text;
         margin-bottom: 1;
     }
     Input:focus {
-        border: solid #58a6ff;
+        border: solid $primary;
     }
 
     /* ---- Checkboxes ---- */
     Checkbox {
-        color: #e6edf3;
+        color: $text;
         padding: 0;
         margin-bottom: 0;
         background: transparent;
     }
     Checkbox:focus {
-        border: solid #58a6ff;
+        border: solid $primary;
     }
 
     /* ---- Action bar buttons ---- */
@@ -161,26 +172,26 @@ class LauncherScreen(Screen):
     /* ---- Boot log ---- */
     #boot-log {
         height: 1fr;
-        border: solid #30363d;
-        background: #161b22;
-        color: #8b949e;
+        border: solid $border;
+        background: transparent;
+        color: $text-muted;
         margin-top: 1;
     }
 
     /* ---- Status ---- */
     #status-label {
-        color: #f85149;
+        color: $error;
         text-style: bold;
         height: 1;
     }
     LoadingIndicator {
         height: 1;
-        color: #58a6ff;
+        color: $primary;
     }
 
     /* ---- No-models notice ---- */
     #no-models-msg {
-        color: #f0883e;
+        color: $warning;
         padding: 1;
     }
     """
@@ -208,24 +219,27 @@ class LauncherScreen(Screen):
                     yield Input(placeholder="e.g. mlx-community/Mistral-7B-v0.1-4bit", id="manual-model")
 
                     yield Label("Options", classes="section-title")
-                    yield Checkbox("Multimodal  (--mllm)", id="opt-mllm")
-                    yield Checkbox("Ngrok tunnel  (public URL)", id="opt-ngrok")
-                    yield Checkbox("Disable tool-call flags", id="opt-no-tool")
+                    with Horizontal(id="options-grid"):
+                        with Vertical(classes="column"):
+                            yield Checkbox("Multimodal  (--mllm)", id="opt-mllm")
+                            yield Checkbox("Ngrok tunnel  (public URL)", id="opt-ngrok")
+                            yield Checkbox("Disable tool-call flags", id="opt-no-tool")
+
+                            yield Label("Port", classes="field-label")
+                            yield Input(value="8001", id="opt-port")
+
+                        with Vertical(classes="column"):
+                            yield Label("Max Model Len  (0 = srv default)", classes="field-label")
+                            yield Input(value="0", id="opt-max-len")
+
+                            yield Label("Quantization  (opt.)", classes="field-label")
+                            yield Input(placeholder="e.g. awq", id="opt-quant")
+
+                            yield Label("Dtype  (opt.)", classes="field-label")
+                            yield Input(placeholder="e.g. float16", id="opt-dtype")
 
                     yield Label("Parser override (leave blank for default)", classes="field-label")
                     yield Input(placeholder="e.g. hermes", id="opt-parser")
-
-                    yield Label("Port", classes="field-label")
-                    yield Input(value="8001", id="opt-port")
-
-                    yield Label("Max Model Len  (0 = server default)", classes="field-label")
-                    yield Input(value="0", id="opt-max-len")
-
-                    yield Label("Quantization  (opt.)", classes="field-label")
-                    yield Input(placeholder="e.g. awq", id="opt-quant")
-
-                    yield Label("Dtype  (opt.)", classes="field-label")
-                    yield Input(placeholder="e.g. float16", id="opt-dtype")
 
                 # ── Pinned action bar — always visible ───────────────────
                 with Vertical(id="action-bar"):
@@ -372,6 +386,23 @@ class LauncherScreen(Screen):
             label.remove_class("error-text")
 
     # ---- Actions -------------------------------------------------------
+
+    def action_launch_server(self) -> None:
+        """Trigger the launch button logic."""
+        self.query_one("#launch-btn", Button).press()
+
+    def action_save_profile(self) -> None:
+        """Trigger the save profile button logic."""
+        self.query_one("#save-profile-btn", Button).press()
+
+    def action_view_metrics(self) -> None:
+        """Open the metrics dashboard."""
+        from .metrics import MetricsScreen
+        self.app.push_screen(MetricsScreen())
+
+    def action_view_boot_server(self) -> None:
+        """Focus the boot log widget."""
+        self.query_one("#boot-log").focus()
 
     def action_quit_app(self) -> None:
         if self.manager:

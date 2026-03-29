@@ -18,6 +18,7 @@ import json
 import re
 import time
 from typing import Optional
+from rich.markdown import Markdown as RichMarkdown
 
 import httpx
 from textual import work
@@ -26,7 +27,7 @@ from textual.binding import Binding
 from textual.containers import Container, Horizontal, ScrollableContainer, Vertical
 from textual.message import Message
 from textual.reactive import reactive
-from textual.screen import Screen, ModalScreen
+import textual.screen
 from textual.widget import Widget
 from textual.widgets import (
     Button,
@@ -97,11 +98,11 @@ class UserBubble(Widget):
         background: transparent;
     }
     UserBubble .bubble-inner {
-        background: #1f4068;
-        border: round #58a6ff;
+        background: transparent;
+        border: round $primary;
         padding: 0 1;
         margin: 0;
-        color: #e6edf3;
+        color: $text;
         width: auto;
         max-width: 75%;
     }
@@ -122,7 +123,7 @@ class SystemMessage(Static):
         width: 100%;
         height: auto;
         content-align: center top;
-        color: #8b949e;
+        color: $text-muted;
         text-style: italic;
         margin: 0;
         padding: 0 1;
@@ -139,21 +140,22 @@ class AssistantBubble(Widget):
     AssistantBubble {
         width: 100%;
         height: auto;
-        max-width: 85%;
+        max-width: 90%;
         margin: 0;
+        layout: vertical;
     }
     AssistantBubble Collapsible {
-        background: #1c2128;
-        border: round #30363d;
-        color: #8b949e;
+        background: transparent;
+        border: round $border;
+        color: $text-muted;
         margin: 0;
-        margin-bottom: 0;
     }
-    AssistantBubble .bubble-body {
-        border: round #3bda8e;
-        background: #122318;
-        padding: 0 1;
-        margin: 0;
+    AssistantBubble Markdown {
+        border-left: round $success;
+        padding: 0 2;
+        margin: 0 0 1 1;
+        background: transparent;
+        height: auto;
     }
     """
 
@@ -166,12 +168,45 @@ class AssistantBubble(Widget):
         if self._reasoning:
             with Collapsible(title="🧠 Reasoning (collapsed)", collapsed=True):
                 yield Static(self._reasoning, markup=False)
-        yield Markdown(self._body or "…", classes="bubble-body")
+        yield Markdown(self._body or "…")
+
+    def _fix_markdown(self, text: str) -> str:
+        """Sanitize 'lazy' Markdown from LLMs. 
+        Ensures tables have separator rows and handles prefixes like 'Example: |'.
+        """
+        lines = text.split("\n")
+        new_lines = []
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Handle cases where LLM prefixes a table row with "Example: |"
+            if " | " in stripped and stripped.count("|") >= 2:
+                 if not stripped.startswith("|"):
+                      idx = stripped.find("|")
+                      if idx > 0:
+                           line = stripped[idx:]
+                           stripped = line.strip()
+
+            new_lines.append(line)
+            
+            # Inject separator if missing
+            if stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2:
+                # If we're at the end of text OR the next line isn't a separator row...
+                is_last = (i + 1 == len(lines))
+                has_next = not is_last
+                is_sep_next = has_next and ("---" in lines[i+1])
+                
+                if is_last or not is_sep_next:
+                    # Construct a separator row
+                    cols = stripped.count("|") - 1
+                    sep = "|" + (" --- |" * cols)
+                    new_lines.append(sep)
+        return "\n".join(new_lines)
 
     def update_body(self, body: str) -> None:
         self._body = body
         try:
-            self.query_one(".bubble-body", Markdown).update(body or "…")
+            fixed = self._fix_markdown(body or "…")
+            self.query_one(Markdown).update(fixed)
         except Exception:
             pass
 
@@ -179,8 +214,8 @@ class AssistantBubble(Widget):
         self._reasoning = reasoning
         self._body = body
         try:
-            md = self.query_one(".bubble-body", Markdown)
-            md.update(body or "")
+            fixed = self._fix_markdown(body or "")
+            self.query_one(Markdown).update(fixed)
         except Exception:
             pass
 
@@ -213,8 +248,8 @@ class SidePanel(Widget):
     DEFAULT_CSS = """
     SidePanel {
         width: 30;
-        border-left: solid #30363d;
-        background: #161b22;
+        border-left: solid $border;
+        background: $surface;
         padding: 0;
         layout: vertical;
     }
@@ -224,50 +259,50 @@ class SidePanel(Widget):
     }
     SidePanel .panel-title {
         text-style: bold;
-        color: #58a6ff;
+        color: $primary;
         padding: 1 0 0 0;
     }
     SidePanel Label {
-        color: #8b949e;
+        color: $text-muted;
         padding: 0;
         margin: 0;
     }
     SidePanel Input {
-        border: solid #30363d;
-        background: #0d1117;
-        color: #e6edf3;
+        border: solid $border;
+        background: $background;
+        color: $text;
         margin-bottom: 0;
         height: 3;
     }
     SidePanel Input:focus {
-        border: solid #58a6ff;
+        border: solid $primary;
     }
     SidePanel Button {
         width: 100%;
         height: 3;
         border: none;
         margin: 0;
-        background: #1c2128;
+        background: transparent;
         content-align: left middle;
         padding-left: 2;
     }
     SidePanel Button:hover {
-        background: #1f4068;
-        color: #58a6ff;
+        background: $primary-darken-1;
+        color: $primary;
     }
     SidePanel ListView {
         height: 1fr;
         min-height: 10;
-        border: solid #30363d;
-        background: #0d1117;
+        border: solid $border;
+        background: $background;
         margin-top: 1;
     }
     SidePanel ListItem {
-        color: #e6edf3;
+        color: $text;
         padding: 0 1;
     }
     SidePanel ListItem.--highlight {
-        background: #1f4068;
+        background: $primary-darken-1;
     }
     """
 
@@ -308,7 +343,11 @@ class SidePanel(Widget):
             yield Input(value="2048", id="opt-max-tokens")
 
             yield Label("System Prompt")
-            yield Input(placeholder="Optional system prompt…", id="opt-system-prompt")
+            yield Input(
+                value="You are a helpful assistant. Provide detailed, structured responses. "
+                      "Use GFM Markdown for tables (always include |---| separator rows) and code blocks.",
+                id="opt-system-prompt"
+            )
 
             yield Label("Chat History")
             yield ListView(id="session-list")
@@ -378,7 +417,7 @@ class SidePanel(Widget):
         }
 
 
-class _RenameModal(ModalScreen):
+class _RenameModal(textual.screen.ModalScreen):
     """Simple inline rename dialog."""
     DEFAULT_CSS = """
     _RenameModal {
@@ -388,8 +427,8 @@ class _RenameModal(ModalScreen):
     #rename-box {
         width: 50;
         height: auto;
-        background: #161b22;
-        border: solid #58a6ff;
+        background: $background;
+        border: solid $primary;
         padding: 1 2;
         layout: vertical;
     }
@@ -446,7 +485,7 @@ class _RenameModal(ModalScreen):
 
 # ── Chat screen ───────────────────────────────────────────────────────────────
 
-class ChatScreen(Screen):
+class ChatScreen(textual.screen.Screen):
     """Primary chat interface."""
 
     BINDINGS = [
@@ -465,7 +504,7 @@ class ChatScreen(Screen):
 
     CSS = """
     ChatScreen {
-        background: #0d1117;
+        background: $background;
         layout: vertical;
     }
 
@@ -496,18 +535,18 @@ class ChatScreen(Screen):
     #input-row {
         height: 5;
         layout: horizontal;
-        border-top: solid #30363d;
+        border-top: solid $border;
         padding: 1;
-        background: #161b22;
+        background: transparent;
     }
     #message-input {
         width: 1fr;
-        border: solid #30363d;
-        background: #0d1117;
-        color: #e6edf3;
+        border: solid $border;
+        background: transparent;
+        color: $text;
     }
     #message-input:focus {
-        border: solid #58a6ff;
+        border: solid $primary;
     }
     #btn-send {
         width: 10;
@@ -578,7 +617,7 @@ class ChatScreen(Screen):
     def on_mount(self) -> None:
         # Update status bar
         try:
-            self.app.query_one(StatusBar).model_name = self.display_name
+            self.query_one(StatusBar).model_name = self.display_name
         except Exception:
             pass
 
@@ -640,7 +679,7 @@ class ChatScreen(Screen):
 
     def on_metrics_update(self, msg: MetricsUpdate) -> None:
         try:
-            sb = self.app.query_one(StatusBar)
+            sb = self.query_one(StatusBar)
             sb.mem_mb = msg.mem_mb
             sb.tokens_per_sec = msg.tps
         except Exception:

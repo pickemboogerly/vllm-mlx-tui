@@ -32,28 +32,28 @@ class StatusBar(Widget):
     DEFAULT_CSS = """
     StatusBar {
         height: 1;
-        background: #1c2128;
-        color: #8b949e;
+        background: $boost;
+        color: $text-muted;
         dock: top;
         layout: horizontal;
     }
     StatusBar .status-left {
         width: 1fr;
         content-align: left middle;
-        color: #58a6ff;
+        color: $primary;
         text-style: bold;
         padding-left: 1;
     }
     StatusBar .status-center {
         width: 1fr;
         content-align: center middle;
-        color: #e6edf3;
+        color: $text;
     }
     StatusBar .status-right {
         width: 1fr;
         content-align: right middle;
         padding-right: 1;
-        color: #8b949e;
+        color: $text-muted;
     }
     """
 

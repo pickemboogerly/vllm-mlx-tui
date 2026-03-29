@@ -23,7 +23,7 @@ import psutil
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, ScrollableContainer, Vertical
-from textual.screen import Screen
+import textual.screen
 from textual.widgets import Footer, Label, Static
 
 try:
@@ -63,7 +63,7 @@ class _SparkLine(Static):
         self.update(f"{self._title}: {last:.1f}\n{bars}")
 
 
-class MetricsScreen(Screen):
+class MetricsScreen(textual.screen.Screen):
     """Full-screen metrics dashboard."""
 
     BINDINGS = [
@@ -80,7 +80,7 @@ class MetricsScreen(Screen):
 
     CSS = """
     MetricsScreen {
-        background: #0d1117;
+        background: $background;
         layout: vertical;
     }
     #metrics-grid {
@@ -91,18 +91,18 @@ class MetricsScreen(Screen):
         padding: 1;
     }
     .chart-cell {
-        border: solid #30363d;
-        background: #161b22;
+        border: solid $border;
+        background: $surface;
         padding: 1;
         height: 100%;
     }
     .chart-title {
-        color: #58a6ff;
+        color: $primary;
         text-style: bold;
         height: 1;
     }
     .chart-caption {
-        color: #8b949e;
+        color: $text-muted;
         height: 1;
         padding-bottom: 1;
     }
@@ -111,7 +111,7 @@ class MetricsScreen(Screen):
     }
     _SparkLine {
         height: 1fr;
-        color: #3bda8e;
+        color: $success;
     }
     """
 
@@ -223,10 +223,10 @@ class MetricsScreen(Screen):
 
     def _redraw_all(self) -> None:
         if _PLOTEXT_AVAILABLE:
-            self._redraw_plotext("plot-tps", "tps", "#58a6ff", "t/s")
-            self._redraw_plotext("plot-mem", "mem", "#3bda8e", "MB")
-            self._redraw_plotext("plot-cpu", "cpu", "#f0883e", "%")
-            self._redraw_plotext("plot-latency", "latency", "#bc8cff", "s")
+            self._redraw_plotext("plot-tps", "tps", "blue", "t/s")
+            self._redraw_plotext("plot-mem", "mem", "green", "MB")
+            self._redraw_plotext("plot-cpu", "cpu", "orange", "%")
+            self._redraw_plotext("plot-latency", "latency", "purple", "s")
         else:
             self._redraw_sparkline("spark-tps", "tps")
             self._redraw_sparkline("spark-mem", "mem")

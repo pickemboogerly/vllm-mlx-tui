@@ -1,19 +1,21 @@
 # vllm-mlx-tui 🚀
 
-> A premium Terminal User Interface (TUI) for discovering, serving, and chatting with local models on Apple Silicon.
+> A premium, high-contrast Terminal User Interface (TUI) for discovering, serving, and chatting with local models on Apple Silicon.
 
-Built for the **MLX** ecosystem, **vllm-mlx-tui** is a lightweight Python-based launcher and chat client that wraps `vllm-mlx`. It transforms your terminal into a powerful local AI workstation with a polished, interactive interface.
+Built for the **MLX** ecosystem, **vllm-mlx-tui** is a keyboard-centric launcher and chat client that wraps `vllm-mlx`. It transforms your terminal into a powerful local AI workstation with a polished, interactive interface that respects your system themes.
 
 ---
 
 ## ✨ Features
 
+- **🎨 High-Contrast "Outlined" Aesthetic**: A premium, border-driven design that eliminates distracting background fills for maximum text legibility across all themes.
+- **🌗 Native Theme Integration**: Fully compatible with Textual's native theme engine (Dark/Light/etc.) via the standard Command Palette (`Ctrl + \`).
+- **📝 Robust Markdown Support**: Enhanced GFM rendering with an auto-healing "fixer" for LLM-generated tables and code blocks.
 - **🔍 Auto-Discovery**: Automatically scans your Hugging Face cache for compatible MLX / safetensors models.
-- **⚡ Supercharged Serving**: Configure and launch `vllm-mlx serve` as a background process directly from the UI.
-- **💬 Polished Chat Interface**: A rich [Textual](https://textual.textualize.io/)-based chat UI with streaming replies and markdown rendering.
-- **🧠 Profile Management**: Easily manage model-specific system prompts and generation settings.
-- **📈 Live Metrics**: Monitor your model's performance and memory consumption in real-time.
-- **🛠 Subprocess Model**: Keeps the UI process light by running inference in a separate process, ensuring a smooth, non-blocking experience.
+- **⚡ Supercharged Launcher**: A two-column configuration wizard with a "Launch on Enter" shortcut and full profile management.
+- **📊 Real-time Metrics**: A live header status bar showing Memory consumption (MB), Generation speed (TPS), CPU usage (%), and Context window (%) saturation.
+- **⌨️ Premium Command Reference**: A beautifully organized help system (`F1`) to master the full keyboard-powered experience.
+- **🧠 Session Context**: Full support for system prompts, temperature tuning, and session-based chat management.
 
 ---
 
@@ -48,37 +50,31 @@ vllm-mlx-tui
 
 ---
 
-## 📖 Usage
+## 📖 Keyboard Shortcuts
 
-### 1. The Launcher
-Upon startup, `vllm-mlx-tui` will list all locally cached models it finds in your Hugging Face directory. You can select a model, set serving parameters (like KV cache fraction), and hit **Start**.
-
-### 2. The Chat
-Once the server is ready, you'll be handed off to the chat console.
-- **Ctrl+N**: New chat session
-- **Ctrl+R**: Switch model (restarts the launcher)
-- **Ctrl+Q**: Quit
+| Shortcut | Action | Context |
+|----------|--------|---------|
+| **Enter** | Launch Model / Send Message | Global / Chat |
+| **Ctrl + \** | Open Command Palette (Themes) | Global |
+| **F1 / Ctrl + H** | Open Command Reference | Global |
+| **Ctrl + S** | Save Current Profile / Session | Launcher / Chat |
+| **Ctrl + N** | Start New Chat Session | Chat |
+| **Ctrl + R** | Switch Back to Launcher | Chat |
+| **Ctrl + L** | Clear Chat History | Chat |
+| **F2** | Rename Active Session (Autosave) | Chat |
+| **Ctrl + E** | Export Chat to Markdown | Chat |
+| **Ctrl + M** | Toggle Metrics Dashboard | Global |
+| **Ctrl + Q** | Graceful Shutdown | Global |
 
 ---
 
 ## 🛠 Tech Stack
 
 - **Core UI**: [Textual](https://textual.textualize.io/) (Python TUI Framework)
+- **Rendering**: [Rich](https://rich.readthedocs.io/) (Markdown, Tables, and Logging)
 - **Networking**: [httpx](https://www.python-httpx.org/) + [httpx-sse](https://github.com/florimondmanca/httpx-sse)
-- **Inference Engine**: [vllm-mlx](https://github.com/ml-explore/vllm-mlx)
-- **Model Discovery**: `huggingface_hub` scan cache API
-
----
-
-## 📝 Configuration
-
-You can override default behavior using environment variables:
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VLLM_PORT` | Port for the vLLM server | `8001` |
-| `VLLM_HOST` | Host for the vLLM server | `127.0.0.1` |
-| `VLLM_MLX_BIN` | Binary name for the server | `vllm-mlx` |
+- **Inference**: [vllm-mlx](https://github.com/ml-explore/vllm-mlx)
+- **Discovery**: `huggingface_hub` scan cache API
 
 ---
 

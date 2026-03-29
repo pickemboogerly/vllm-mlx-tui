@@ -22,18 +22,10 @@ class VLLMMlxTUIApp(App):
 
     CSS = """
     /* ---- Global design tokens ---- */
-    $bg:        #0d1117;
-    $surface:   #161b22;
-    $border:    #30363d;
-    $accent:    #58a6ff;
-    $accent2:   #3bda8e;
-    $warning:   #f0883e;
-    $error:     #f85149;
-    $muted:     #8b949e;
-    $text:      #e6edf3;
-
+    /* We use Textual's standard variables here so they can be overridden by themes. */
+    
     Screen {
-        background: $bg;
+        background: $background;
         color: $text;
     }
 
@@ -53,10 +45,10 @@ class VLLMMlxTUIApp(App):
         color: $error;
     }
     .success-text {
-        color: $accent2;
+        color: $success;
     }
     .muted {
-        color: $muted;
+        color: $text-muted;
     }
     """
 
