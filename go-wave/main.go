@@ -2,16 +2,16 @@ package main
 
 import (
 	"fmt"
-	"go-wave/internal/ui"
 	"os"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
-	p := tea.NewProgram(ui.NewAppModel(), tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error running program: %v", err)
-		os.Exit(1)
-	}
+	fmt.Println("========================================================")
+	fmt.Println("⚠️ WARNING: The Go implementation of vLLM-wave (go-wave)")
+	fmt.Println("has been officially DEPRECATED as a failed experiment.")
+	fmt.Println("Please use the Python version instead.")
+	fmt.Println()
+	fmt.Println("To run the canonical version: ./run_python_wave.sh")
+	fmt.Println("========================================================")
+	os.Exit(1)
 }

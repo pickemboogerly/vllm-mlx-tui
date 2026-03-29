@@ -15,6 +15,10 @@
 
 **Out of scope (today):** Serving GGUF-only weights with `vllm-mlx` (explicitly unsupported upstream); embedding the inference engine inside the TUI process.
 
+### 1.1 Historical Note: Go Implementation
+
+An earlier implementation of vLLM-wave was attempted in Go (`go-wave`) using Bubble Tea. This has been officially **deprecated as a failed experiment** due to complex concurrency, race conditions, and stability issues related to polling the background server within the TUI event loop. The project has fully pivoted to the Python (`python-wave`) implementation using Textual, which is the canonical version documented here.
+
 ---
 
 ## 2. Goals
@@ -120,7 +124,18 @@
 
 ---
 
-## 6. Technical constraints
+## 6. Architecture & Concurrency Model
+
+**Core Design Constraint:** The TUI must never block on I/O. As highlighted in `architecture.md`, all external interactions (HTTP streaming, subprocess polling, metrics) run as **async tasks** coordinated through the central Textual event loop.
+
+- **Task-Oriented Concurrency**: Operations like chat streaming, metrics polling, log streaming, and process monitoring are handled by dedicated `asyncio` loop tasks.
+- **Message Passing**: Background tasks communicate with the UI purely via Textual `Message` classes (`post_message()`). UI elements never share mutable state with background loop tasks.
+- **Cancellation & Isolation**: Tasks maintain strict state bounds. Changes in application state (like model switching) cancel existing stream tasks to prevent race conditions. All worker tasks trap exceptions and report `SystemError` to preventing silent crashes.
+- **Backpressure**: High-throughput streams buffer tokens into batches to prevent locking the Textual render thread during high token generation rates.
+
+---
+
+## 7. Technical constraints
 
 - **Python:** 3.10+.
 - **Dependencies:** `textual`, `httpx`, `huggingface_hub` (see `pyproject.toml`).
@@ -129,14 +144,14 @@
 
 ---
 
-## 7. Human-readable model naming
+## 8. Human-readable model naming
 
 - **Display strings** for HF cache paths under `…/models--org--name/snapshots/<hash>` map to **`models--org/name`** for UI labels.
 - **Chat API** continues to use the model **id** from `/v1/models` when available.
 
 ---
 
-## 8. Known limitations (acceptable for v0.1)
+## 9. Known limitations (acceptable for v0.1)
 
 - Full markdown rebuild on each transcript refresh (throttled during streaming); very long histories may be heavy.
 - User/assistant content in markdown can theoretically interact with markdown syntax (e.g. headings in user text); acceptable tradeoff for rich rendering.
@@ -145,7 +160,7 @@
 
 ---
 
-## 9. Future work / refactor hooks (not committed)
+## 10. Future work / refactor hooks (not committed)
 
 Use this section for backlog items; verify against code before implementing.
 
@@ -157,7 +172,7 @@ Use this section for backlog items; verify against code before implementing.
 
 ---
 
-## 10. Document maintenance
+## 11. Document maintenance
 
 - Update this PRD when user-visible behavior, CLI, or env contract changes.
 - **Source of truth:** `vllm_wave/*.py`, `README.md`, and `tests/`—if the PRD disagrees with code, treat code as authoritative until the doc is fixed.

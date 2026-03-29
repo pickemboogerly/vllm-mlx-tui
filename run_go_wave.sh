@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
-# Ensure we're relative to the script location
-cd "$(dirname "$0")/go-wave"
-
-echo "🐹 Setting up Go environment for vLLM-wave..."
-
-# Tidy dependencies and build the binary
-echo "Compiling..."
-go mod tidy
-go build -o vllm-wave-bin .
-
-echo "✨ Launching vLLM-wave (Go / Bubble Tea)..."
-echo "--------------------------------------------------------"
-./vllm-wave-bin
+echo "========================================================"
+echo "⚠️ WARNING: The Go implementation of vLLM-wave (go-wave)"
+echo "has been officially DEPRECATED as a failed experiment."
+echo "Please use the Python version instead."
+echo ""
+echo "To run the canonical version: ./run_python_wave.sh"
+echo "========================================================"
+exit 1
