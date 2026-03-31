@@ -25,7 +25,7 @@ import psutil
 LogCallback = Callable[[str], Awaitable[None]]
 
 VLLM_MLX_BIN = os.environ.get("VLLM_MLX_BIN", "vllm-mlx")
-API_READY_TIMEOUT = int(os.environ.get("API_READY_TIMEOUT", "120"))
+API_READY_TIMEOUT = int(os.environ.get("API_READY_TIMEOUT", "1200"))
 
 
 def _validate_model_id(model_id: str) -> None:
@@ -102,12 +102,18 @@ class ServerManager:
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
-                preexec_fn=os.setpgrp,
+                start_new_session=True,
             )
         except FileNotFoundError:
             return False, f"'{VLLM_MLX_BIN}' not found."
         except Exception as e:
             return False, str(e)
+
+        # Pre-flight check: is the port already bound?
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex((self.host, self.port)) == 0:
+                return False, f"Port {self.port} is already in use. Please stop the existing server first."
 
         # Stream stderr in background
         self._stderr_task = asyncio.create_task(self._stream_stderr())
@@ -142,10 +148,6 @@ class ServerManager:
 
         if not ready:
             return False, f"Server not ready after {API_READY_TIMEOUT}s."
-
-        # Final model-count validation (TOCTOU mitigation)
-        if not await self._validate_model_loaded():
-            return False, "Server started but /v1/models returned no models."
 
         if self.use_ngrok:
             asyncio.create_task(self._start_ngrok())
@@ -241,7 +243,10 @@ class ServerManager:
             await self._emit_log(f"[stderr reader error: {e}]")
 
     async def _poll_readiness(self) -> bool:
-        """Poll /v1/models until 200 or timeout."""
+        """Poll /v1/models until it lists the requested model, or timeout."""
+        # vllm-mlx usually lists the full hub ID, but sometimes just the basename
+        short_id = self.model_id.split("/")[-1]
+
         async with httpx.AsyncClient() as client:
             for _ in range(API_READY_TIMEOUT):
                 try:
@@ -249,19 +254,27 @@ class ServerManager:
                         f"{self.base_url}/v1/models", timeout=2.0
                     )
                     if res.status_code == 200:
-                        return True
-                except httpx.RequestError:
+                        data = res.json().get("data", [])
+                        current_ids = [m.get("id", "") for m in data]
+                        
+                        # Match full path, short name, or the exact absolute local path we booted with
+                        if (self.model_id in current_ids or 
+                            short_id in current_ids or 
+                            self.model_arg in current_ids):
+                            await self._emit_log(f"[TUI] ✅ Model '{self.model_id}' found in registry! Initializing chat...")
+                            # Final 1s grace to ensure engine is truly stable
+                            await asyncio.sleep(1.0)
+                            return True
+                        else:
+                            # Log every ~5s to not spam but keep user informed
+                            if _ % 5 == 0:
+                                await self._emit_log(f"[TUI] ⏳ Waiting for engine metadata (ID '{self.model_id}' not listed yet)...")
+                except (httpx.RequestError, ValueError, KeyError):
+                    if _ % 5 == 0:
+                        await self._emit_log(f"[TUI] ⏳ Still waiting for port {self.port} to become responsive...")
                     pass
                 await asyncio.sleep(1.0)
         return False
-
-    async def _validate_model_loaded(self) -> bool:
-        try:
-            async with httpx.AsyncClient() as client:
-                res = await client.get(f"{self.base_url}/v1/models", timeout=5.0)
-                return len(res.json().get("data", [])) > 0
-        except Exception:
-            return False
 
     async def _start_ngrok(self) -> None:
         import shutil as _shutil

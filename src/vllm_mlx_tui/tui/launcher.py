@@ -35,6 +35,7 @@ from textual.widgets import (
 from ..cache import discover_cached_models, CachedModel
 from ..profiles import Profile, list_profiles, save_profile, load_default_profile
 from ..server import ServerManager
+from ..downloader import ensure_model_is_downloaded
 from .statusbar import StatusBar
 
 _BOOT_LOG_PATH = Path.home() / ".cache" / "vllm-mlx-tui" / "boot_log.txt"
@@ -92,6 +93,7 @@ class LauncherScreen(textual.screen.Screen):
     }
     #options-grid .column {
         width: 1fr;
+        height: auto;
         padding-right: 2;
     }
     #right-panel {
@@ -228,6 +230,9 @@ class LauncherScreen(textual.screen.Screen):
                             yield Label("Port", classes="field-label")
                             yield Input(value="8001", id="opt-port")
 
+                            yield Label("Host", classes="field-label")
+                            yield Input(value="127.0.0.1", id="opt-host")
+
                         with Vertical(classes="column"):
                             yield Label("Max Model Len  (0 = srv default)", classes="field-label")
                             yield Input(value="0", id="opt-max-len")
@@ -354,6 +359,7 @@ class LauncherScreen(textual.screen.Screen):
             name=name,
             model=self._selected_model_id() or "",
             port=_int("#opt-port", 8001, 1, 65535),
+            host=self.query_one("#opt-host", Input).value.strip() or "127.0.0.1",
             mllm=self.query_one("#opt-mllm", Checkbox).value,
             ngrok=self.query_one("#opt-ngrok", Checkbox).value,
             no_tool_parser=self.query_one("#opt-no-tool", Checkbox).value,
@@ -367,6 +373,7 @@ class LauncherScreen(textual.screen.Screen):
         try:
             self.query_one("#manual-model", Input).value = p.model
             self.query_one("#opt-port", Input).value = str(p.port)
+            self.query_one("#opt-host", Input).value = p.host
             self.query_one("#opt-mllm", Checkbox).value = p.mllm
             self.query_one("#opt-ngrok", Checkbox).value = p.ngrok
             self.query_one("#opt-no-tool", Checkbox).value = p.no_tool_parser
@@ -437,9 +444,11 @@ class LauncherScreen(textual.screen.Screen):
             display_name = self._selected_display_name()
             try:
                 port = int(self.query_one("#opt-port", Input).value.strip() or "8001")
+                host = self.query_one("#opt-host", Input).value.strip() or "127.0.0.1"
             except ValueError:
                 port = 8001
-            self._boot_server(model_id, snapshot_path, display_name, port)
+                host = "127.0.0.1"
+            self._boot_server(model_id, snapshot_path, display_name, port, host)
 
         elif btn_id == "save-profile-btn":
             model_id = self._selected_model_id()
@@ -477,6 +486,7 @@ class LauncherScreen(textual.screen.Screen):
         snapshot_path: str,
         display_name: str,
         port: int,
+        host: str,
     ) -> None:
         btn = self.query_one("#launch-btn", Button)
         load = self.query_one("#loading", LoadingIndicator)
@@ -493,6 +503,7 @@ class LauncherScreen(textual.screen.Screen):
 
         # Build extra args from UI
         extra_args: list[str] = []
+        # (Values passed as args take priority)
         mllm = self.query_one("#opt-mllm", Checkbox).value
         ngrok = self.query_one("#opt-ngrok", Checkbox).value
         no_tool = self.query_one("#opt-no-tool", Checkbox).value
@@ -518,18 +529,27 @@ class LauncherScreen(textual.screen.Screen):
         if dtype:
             extra_args += ["--dtype", dtype]
 
+        # Define log callback early
+        async def on_log_line(line: str) -> None:
+            log.write_line(line)
+            log_file.write(line + "\n")
+
         try:
+            # 1. ENSURE MODEL IS DOWNLOADED (Pre-flight)
+            self._set_status(f"Pre-flight: Checking results for model '{model_id}'...")
+            # This ensures we have a fully populated local HF snapshot before hitting serve
+            local_snapshot = await ensure_model_is_downloaded(model_id, on_log_line)
+            
+            # 2. START SERVER
+            self._set_status("Starting vllm-mlx kernel…")
             self.manager = ServerManager(
                 model_id=model_id,
-                snapshot_path=snapshot_path,
+                snapshot_path=local_snapshot,
                 port=port,
+                host=host,
                 extra_args=extra_args,
                 use_ngrok=ngrok,
             )
-
-            async def on_log_line(line: str) -> None:
-                log.write_line(line)
-                log_file.write(line + "\n")
 
             ready, error_msg = await self.manager.start(log_callback=on_log_line)
 
