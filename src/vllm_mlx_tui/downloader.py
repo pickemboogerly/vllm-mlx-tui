@@ -7,12 +7,39 @@ with real-time progress reporting.
 from __future__ import annotations
 
 import asyncio
+import importlib
+import json
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from huggingface_hub import snapshot_download
 
 ProgressCallback = Callable[[float, str], Awaitable[None]]
+
+
+def _validate_mlx_arch_support(snapshot_path: str) -> None:
+    """Raise if local mlx_lm cannot import this model architecture."""
+    config_path = Path(snapshot_path) / "config.json"
+    if not config_path.exists():
+        return
+
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    model_type = str(config.get("model_type", "")).strip()
+    if not model_type:
+        return
+
+    try:
+        # mlx_lm loads architectures from mlx_lm.models.<model_type>
+        importlib.import_module(f"mlx_lm.models.{model_type}")
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            f"Model architecture '{model_type}' is not supported by your installed mlx_lm."
+            " Update mlx-lm/vllm-mlx, or select a different model."
+        ) from exc
 
 
 class ModelDownloader:
@@ -88,6 +115,10 @@ async def ensure_model_is_downloaded(model_id: str, log_cb: Optional[Callable[[s
     
     downloader = ModelDownloader(model_id)
     path = await downloader.download(log_cb)
+
+    if log_cb:
+        await log_cb("[TUI] Verifying local mlx_lm architecture support...")
+    _validate_mlx_arch_support(path)
     
     if log_cb:
         # Avoid showing the full path (privacy/noise)

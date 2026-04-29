@@ -11,10 +11,12 @@ Responsible for:
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import shutil
 import signal
 import socket
+import sys
 import time
 from collections import deque
 from typing import Awaitable, Callable, List, Optional, Tuple
@@ -26,6 +28,7 @@ LogCallback = Callable[[str], Awaitable[None]]
 
 VLLM_MLX_BIN = os.environ.get("VLLM_MLX_BIN", "vllm-mlx")
 API_READY_TIMEOUT = int(os.environ.get("API_READY_TIMEOUT", "1200"))
+_DEFAULT_VLLM_MLX_BIN = "vllm-mlx"
 
 
 def _validate_model_id(model_id: str) -> None:
@@ -35,6 +38,19 @@ def _validate_model_id(model_id: str) -> None:
     # paths: absolute or relative with common safe chars
     if not re.match(r"^[a-zA-Z0-9/._\-\\]+$", model_id) or model_id.startswith("-"):
         raise ValueError(f"Invalid model ID or path: {model_id!r}")
+
+
+def _vllm_mlx_command_prefix() -> List[str]:
+    """Return the command prefix used to launch vllm-mlx."""
+    if VLLM_MLX_BIN != _DEFAULT_VLLM_MLX_BIN:
+        return [VLLM_MLX_BIN]
+
+    # Use a tiny Python launcher when possible so we can apply compatibility
+    # patches for known vllm-mlx releases before its CLI imports the engine.
+    if importlib.util.find_spec("vllm_mlx") and importlib.util.find_spec("vllm_mlx_tui"):
+        return [sys.executable, "-m", "vllm_mlx_tui._vllm_mlx_launcher"]
+
+    return [VLLM_MLX_BIN]
 
 
 class ServerManager:
@@ -86,11 +102,12 @@ class ServerManager:
         """
         self._log_cb = log_callback
 
-        if not shutil.which(VLLM_MLX_BIN):
+        command_prefix = _vllm_mlx_command_prefix()
+        if command_prefix == [VLLM_MLX_BIN] and not shutil.which(VLLM_MLX_BIN):
             return False, f"'{VLLM_MLX_BIN}' not found on PATH."
 
         cmd = [
-            VLLM_MLX_BIN, "serve", self.model_arg,
+            *command_prefix, "serve", self.model_arg,
             "--host", self.host,
             "--port", str(self.port),
         ] + self.extra_args
