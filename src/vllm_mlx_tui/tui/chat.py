@@ -18,7 +18,6 @@ import json
 import re
 import time
 from typing import Optional
-from rich.markdown import Markdown as RichMarkdown
 
 import httpx
 from textual import work
@@ -53,8 +52,13 @@ from ..sessions import (
 )
 from .statusbar import StatusBar
 
-# Streaming throttle: accumulate tokens for this many ms before re-render
-_RENDER_THROTTLE_MS = 80
+# Streaming throttle: accumulate tokens for this many ms before re-render.
+# Static.update is cheap so we can keep this responsive without freezing the UI.
+_RENDER_THROTTLE_MS = 60
+
+# Number of token deltas to buffer in the network worker before posting a
+# single TokenReceived message to the UI thread. Keeps message pump cool.
+_TOKEN_BATCH = 8
 
 
 # ── Messages ──────────────────────────────────────────────────────────────────
@@ -134,7 +138,12 @@ class SystemMessage(Static):
 
 
 class AssistantBubble(Widget):
-    """Left-aligned assistant message with optional <think> collapsible."""
+    """Left-aligned assistant message.
+
+    Uses a cheap ``Static`` widget while the stream is in progress (so each
+    incremental update is O(text-length) plain-text repaint), then swaps in a
+    ``Markdown`` widget on ``finalize`` for properly rendered markdown.
+    """
 
     DEFAULT_CSS = """
     AssistantBubble {
@@ -150,72 +159,78 @@ class AssistantBubble(Widget):
         color: $text-muted;
         margin: 0;
     }
-    AssistantBubble Markdown {
+    AssistantBubble .stream-body,
+    AssistantBubble .final-body {
         border-left: round $success;
         padding: 0 2;
         margin: 0 0 1 1;
         background: transparent;
         height: auto;
+        width: 100%;
     }
     """
 
-    def __init__(self, reasoning: str = "", body: str = "", **kwargs):
+    def __init__(self, reasoning: str = "", body: str = "", streaming: bool = False, **kwargs):
         super().__init__(**kwargs)
         self._reasoning = reasoning
         self._body = body
+        self._streaming = streaming
+        self._stream_widget: Optional[Static] = None
 
     def compose(self) -> ComposeResult:
         if self._reasoning:
             with Collapsible(title="🧠 Reasoning (collapsed)", collapsed=True):
                 yield Static(self._reasoning, markup=False)
-        yield Markdown(self._body or "…")
+        if self._streaming:
+            self._stream_widget = Static(self._body or "…", classes="stream-body", markup=False)
+            yield self._stream_widget
+        else:
+            yield Markdown(self._fix_markdown(self._body or "…"), classes="final-body")
 
-    def _fix_markdown(self, text: str) -> str:
-        """Sanitize 'lazy' Markdown from LLMs. 
-        Ensures tables have separator rows and handles prefixes like 'Example: |'.
-        """
+    @staticmethod
+    def _fix_markdown(text: str) -> str:
+        """Inject missing GFM table separator rows for lazy LLM output."""
         lines = text.split("\n")
-        new_lines = []
+        new_lines: list[str] = []
         for i, line in enumerate(lines):
             stripped = line.strip()
-            # Handle cases where LLM prefixes a table row with "Example: |"
-            if " | " in stripped and stripped.count("|") >= 2:
-                 if not stripped.startswith("|"):
-                      idx = stripped.find("|")
-                      if idx > 0:
-                           line = stripped[idx:]
-                           stripped = line.strip()
-
+            if " | " in stripped and stripped.count("|") >= 2 and not stripped.startswith("|"):
+                idx = stripped.find("|")
+                if idx > 0:
+                    line = stripped[idx:]
+                    stripped = line.strip()
             new_lines.append(line)
-            
-            # Inject separator if missing
             if stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2:
-                # If we're at the end of text OR the next line isn't a separator row...
                 is_last = (i + 1 == len(lines))
-                has_next = not is_last
-                is_sep_next = has_next and ("---" in lines[i+1])
-                
+                is_sep_next = (not is_last) and ("---" in lines[i + 1])
                 if is_last or not is_sep_next:
-                    # Construct a separator row
                     cols = stripped.count("|") - 1
-                    sep = "|" + (" --- |" * cols)
-                    new_lines.append(sep)
+                    new_lines.append("|" + (" --- |" * cols))
         return "\n".join(new_lines)
 
     def update_body(self, body: str) -> None:
+        """Cheap streaming update: refresh the Static widget only."""
         self._body = body
+        if self._stream_widget is None:
+            return
         try:
-            fixed = self._fix_markdown(body or "…")
-            self.query_one(Markdown).update(fixed)
+            self._stream_widget.update(body or "…")
         except Exception:
             pass
 
     def finalize(self, reasoning: str, body: str) -> None:
+        """Stream complete: replace Static with a Markdown widget (or a Static
+        for plain error text if ``body`` came from an error path)."""
         self._reasoning = reasoning
         self._body = body
+        self._streaming = False
+        if self._stream_widget is None:
+            return
         try:
-            fixed = self._fix_markdown(body or "")
-            self.query_one(Markdown).update(fixed)
+            md = Markdown(self._fix_markdown(body or ""), classes="final-body")
+            self.mount(md, after=self._stream_widget)
+            self._stream_widget.remove()
+            self._stream_widget = None
         except Exception:
             pass
 
@@ -548,25 +563,9 @@ class ChatScreen(textual.screen.Screen):
     #message-input:focus {
         border: solid $primary;
     }
-    #btn-send {
+    #btn-send, #btn-stop {
         width: 10;
         margin-left: 1;
-    }
-    #btn-stop {
-        width: 10;
-        margin-left: 1;
-        display: none;
-    }
-    #btn-stop.visible {
-        display: block;
-    }
-
-    /* ── Stop active ── */
-    .streaming #btn-send {
-        display: none;
-    }
-    .streaming #btn-stop {
-        display: block;
     }
     """
 
@@ -579,6 +578,9 @@ class ChatScreen(textual.screen.Screen):
     ):
         super().__init__(**kwargs)
         self.manager = manager
+        # Initial model id is what the launcher knows (HF repo id). The actual
+        # id the server registered may differ (e.g. snapshot path); we'll fetch
+        # it from /v1/models on mount and override.
         self.model_id = model_id
         self.display_name = display_name or model_id
 
@@ -615,22 +617,57 @@ class ChatScreen(textual.screen.Screen):
     # ── Mount ───────────────────────────────────────────────────────────
 
     def on_mount(self) -> None:
-        # Update status bar
         try:
             self.query_one(StatusBar).model_name = self.display_name
         except Exception:
             pass
 
-        # Start metrics polling
-        self._metrics_task_handle = self.set_interval(2.0, self._poll_metrics)
+        self._set_streaming_ui(False)
 
-        # Show welcome message
+        self._metrics_task_handle = self.set_interval(2.0, self._poll_metrics_async)
+
         self._add_system_message(
             f"Connected to **{self.display_name}**. "
             f"Listening on `{self.manager.base_url}`."
         )
-        # Load sessions in panel
         self.query_one(SidePanel).refresh_sessions()
+        self.call_after_refresh(lambda: self.query_one("#message-input", Input).focus())
+
+        # Resolve the server-registered model id (vllm-mlx may register the
+        # model under its snapshot path rather than the HF repo id).
+        asyncio.create_task(self._resolve_server_model_id())
+
+    async def _resolve_server_model_id(self) -> None:
+        try:
+            timeout = httpx.Timeout(connect=3.0, read=5.0, write=3.0, pool=3.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(f"{self.manager.base_url}/v1/models")
+                resp.raise_for_status()
+                data = resp.json()
+            ids = [m.get("id") for m in data.get("data", []) if m.get("id")]
+        except Exception as exc:
+            self.notify(
+                f"Could not query /v1/models: {exc}",
+                title="Server check",
+                severity="warning",
+                timeout=6,
+            )
+            return
+        if not ids:
+            self.notify(
+                "Server has no models loaded.",
+                title="Server check",
+                severity="warning",
+                timeout=6,
+            )
+            return
+        if self.model_id not in ids:
+            self.notify(
+                f"Using server model id: {ids[0]}",
+                title="Model resolved",
+                timeout=4,
+            )
+            self.model_id = ids[0]
 
     def on_unmount(self) -> None:
         self._cancel_stream()
@@ -662,19 +699,28 @@ class ChatScreen(textual.screen.Screen):
     def on_token_received(self, msg: TokenReceived) -> None:
         self._current_content += msg.token
         now = time.monotonic()
-        if now - self._last_render >= _RENDER_THROTTLE_MS / 1000.0:
-            self._last_render = now
-            if self._current_bubble:
-                _, body = _split_think(self._current_content)
-                self._current_bubble.update_body(body or "…")
-                self.query_one("#chat-scroll").scroll_end(animate=False)
+        if now - self._last_render < _RENDER_THROTTLE_MS / 1000.0:
+            return
+        self._last_render = now
+        if self._current_bubble is None:
+            return
+        _, body = _split_think(self._current_content)
+        self._current_bubble.update_body(body or "…")
+        try:
+            self.query_one("#chat-scroll").scroll_end(animate=False)
+        except Exception:
+            pass
 
     def on_stream_done(self, msg: StreamDone) -> None:
         self._finalize_stream()
 
     def on_stream_error(self, msg: StreamError) -> None:
+        err_text = f"⚠  Error: {msg.error}"
+        # Make sure the error replaces the final content so finalize doesn't wipe it.
+        self._current_content = err_text
         if self._current_bubble:
-            self._current_bubble.update_body(f"⚠  Error: {msg.error}")
+            self._current_bubble.update_body(err_text)
+        self.notify(msg.error, title="Chat error", severity="error", timeout=8)
         self._finalize_stream()
 
     def on_metrics_update(self, msg: MetricsUpdate) -> None:
@@ -784,37 +830,37 @@ class ChatScreen(textual.screen.Screen):
     @work(exclusive=False)
     async def _do_send(self, prompt: str) -> None:
         """Mount user + assistant bubbles then launch the stream."""
-        self._cancel_stream()
-        self._streaming = True
-        self._stop_flag = False
-        self._set_streaming_ui(True)
+        try:
+            self._streaming = True
+            self._stop_flag = False
+            self._set_streaming_ui(True)
 
-        # Record user message
-        self._session.messages.append({"role": "user", "content": prompt})
-        if len(self._session.messages) == 1:
-            self._session.title = (prompt[:40] + "…") if len(prompt) > 40 else prompt
+            self._session.messages.append({"role": "user", "content": prompt})
+            if len(self._session.messages) == 1:
+                self._session.title = (prompt[:40] + "…") if len(prompt) > 40 else prompt
 
-        scroll = self.query_one("#chat-scroll")
+            scroll = self.query_one("#chat-scroll")
 
-        # Mount user bubble (self-right-aligning via CSS)
-        user_bubble = UserBubble(prompt)
-        await scroll.mount(user_bubble)
+            user_bubble = UserBubble(prompt)
+            await scroll.mount(user_bubble)
 
-        # Mount streaming assistant bubble
-        assistant_bubble = AssistantBubble()
-        self._current_bubble = assistant_bubble
-        self._current_content = ""
-        await scroll.mount(assistant_bubble)
-        scroll.scroll_end(animate=False)
+            assistant_bubble = AssistantBubble(body="Waiting for response…", streaming=True)
+            self._current_bubble = assistant_bubble
+            self._current_content = ""
+            self._last_render = 0.0
+            await scroll.mount(assistant_bubble)
+            scroll.scroll_end(animate=False)
 
-        # Get generation options
-        opts = self.query_one(SidePanel).get_options()
-        sys_prompt = opts.get("system_prompt", "")
+            opts = self.query_one(SidePanel).get_options()
+            sys_prompt = opts.get("system_prompt", "")
 
-        # Kick off the HTTP stream task
-        self._stream_task = asyncio.create_task(
-            self._stream_chat(prompt, opts, sys_prompt)
-        )
+            self._stream_task = asyncio.create_task(
+                self._stream_chat(prompt, opts, sys_prompt)
+            )
+        except Exception as exc:
+            # Surface failures that happen before the stream task starts
+            # (e.g. mount errors) so the UI doesn't appear dead.
+            self.post_message(StreamError(f"Send failed: {exc}"))
 
     async def _stream_chat(self, prompt: str, opts: dict, sys_prompt: str) -> None:
         """Async task: streams chat completions and posts messages to UI."""
@@ -835,8 +881,9 @@ class ChatScreen(textual.screen.Screen):
         start_time = time.monotonic()
         token_count = 0
 
+        timeout = httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0)
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream(
                     "POST",
                     f"{self.manager.base_url}/v1/chat/completions",
@@ -846,7 +893,7 @@ class ChatScreen(textual.screen.Screen):
                     resp.raise_for_status()
                     buffer: list[str] = []
                     async for line in resp.aiter_lines():
-                        if self._stop_flag or self._stream_task.cancelled():
+                        if self._stop_flag:
                             break
                         if not line.startswith("data:"):
                             continue
@@ -856,31 +903,30 @@ class ChatScreen(textual.screen.Screen):
                         try:
                             data = json.loads(data_str)
                             delta = data["choices"][0]["delta"].get("content", "")
-                            if delta:
-                                buffer.append(delta)
-                                if len(buffer) >= 5:
-                                    for tok in buffer:
-                                        self.post_message(TokenReceived(tok))
-                                        token_count += 1
-                                    buffer.clear()
                         except (KeyError, ValueError, json.JSONDecodeError):
-                            # Skip malformed chunks but continue the stream
                             continue
+                        if not delta:
+                            continue
+                        buffer.append(delta)
+                        if len(buffer) >= _TOKEN_BATCH:
+                            chunk = "".join(buffer)
+                            token_count += len(buffer)
+                            buffer.clear()
+                            self.post_message(TokenReceived(chunk))
 
-                    # Flush remaining buffer tokens
                     if buffer:
-                        for tok in buffer:
-                            self.post_message(TokenReceived(tok))
-                            token_count += 1
+                        chunk = "".join(buffer)
+                        token_count += len(buffer)
+                        buffer.clear()
+                        self.post_message(TokenReceived(chunk))
 
-            # End of successful stream
             self.post_message(StreamDone())
 
             # Update metrics
             elapsed = time.monotonic() - start_time
             if elapsed > 0:
                 tps = token_count / elapsed
-                mem = self.manager.get_memory_usage()
+                mem = await asyncio.to_thread(self.manager.get_memory_usage)
                 self.post_message(MetricsUpdate(mem_mb=mem, tps=tps))
 
         except asyncio.CancelledError:
@@ -925,21 +971,22 @@ class ChatScreen(textual.screen.Screen):
         if self._stream_task and not self._stream_task.done():
             self._stop_flag = True
             self._stream_task.cancel()
+        self._stream_task = None
         self._streaming = False
         self._set_streaming_ui(False)
 
     def _set_streaming_ui(self, active: bool) -> None:
+        """Toggle Send/Stop buttons via Textual's display attribute (reliable)."""
         try:
-            inp = self.query_one("#message-input", Input)
-            inp.disabled = active
             send = self.query_one("#btn-send", Button)
             stop = self.query_one("#btn-stop", Button)
-            if active:
-                send.add_class("hidden")
-                stop.remove_class("hidden")
-            else:
-                send.remove_class("hidden")
-                stop.add_class("hidden")
+            send.display = not active
+            stop.display = active
+        except Exception:
+            pass
+        try:
+            inp = self.query_one("#message-input", Input)
+            inp.disabled = False
         except Exception:
             pass
 
@@ -987,7 +1034,12 @@ class ChatScreen(textual.screen.Screen):
 
     # ── Background metrics poll ─────────────────────────────────────────
 
-    def _poll_metrics(self) -> None:
-        if self.manager:
-            mem = self.manager.get_memory_usage()
-            self.post_message(MetricsUpdate(mem_mb=mem, tps=0.0))
+    async def _poll_metrics_async(self) -> None:
+        """Periodic memory snapshot. Async so set_interval cancels it cleanly."""
+        if not self.manager:
+            return
+        try:
+            mem = await asyncio.to_thread(self.manager.get_memory_usage)
+        except Exception:
+            return
+        self.post_message(MetricsUpdate(mem_mb=mem, tps=0.0))
