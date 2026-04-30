@@ -17,9 +17,10 @@ import asyncio
 import json
 import re
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
+from rich.markdown import Markdown as RichMarkdown
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -36,7 +37,6 @@ from textual.widgets import (
     Label,
     ListItem,
     ListView,
-    Markdown,
     Static,
     TabbedContent,
     TabPane,
@@ -53,12 +53,16 @@ from ..sessions import (
 from .statusbar import StatusBar
 
 # Streaming throttle: accumulate tokens for this many ms before re-render.
-# Static.update is cheap so we can keep this responsive without freezing the UI.
-_RENDER_THROTTLE_MS = 60
+# Rich Markdown reparse is cheaper than Textual's Markdown widget but still
+# scales with content length, so 150ms keeps things smooth on long answers.
+_RENDER_THROTTLE_MS = 150
 
 # Number of token deltas to buffer in the network worker before posting a
 # single TokenReceived message to the UI thread. Keeps message pump cool.
 _TOKEN_BATCH = 8
+
+# Code-block syntax theme used by Rich Markdown rendering.
+_CODE_THEME = "monokai"
 
 
 # ── Messages ──────────────────────────────────────────────────────────────────
@@ -140,9 +144,11 @@ class SystemMessage(Static):
 class AssistantBubble(Widget):
     """Left-aligned assistant message.
 
-    Uses a cheap ``Static`` widget while the stream is in progress (so each
-    incremental update is O(text-length) plain-text repaint), then swaps in a
-    ``Markdown`` widget on ``finalize`` for properly rendered markdown.
+    Renders the body through ``rich.markdown.Markdown`` into a single
+    ``Static`` widget. Rich's markdown is a one-shot renderable — much
+    cheaper than Textual's ``Markdown`` widget (which mounts child widgets
+    per block), so we can keep proper formatting during streaming without
+    freezing the UI on long replies.
     """
 
     DEFAULT_CSS = """
@@ -159,8 +165,7 @@ class AssistantBubble(Widget):
         color: $text-muted;
         margin: 0;
     }
-    AssistantBubble .stream-body,
-    AssistantBubble .final-body {
+    AssistantBubble .msg-body {
         border-left: round $success;
         padding: 0 2;
         margin: 0 0 1 1;
@@ -175,17 +180,17 @@ class AssistantBubble(Widget):
         self._reasoning = reasoning
         self._body = body
         self._streaming = streaming
-        self._stream_widget: Optional[Static] = None
+        self._body_widget: Optional[Static] = None
 
     def compose(self) -> ComposeResult:
         if self._reasoning:
             with Collapsible(title="🧠 Reasoning (collapsed)", collapsed=True):
                 yield Static(self._reasoning, markup=False)
-        if self._streaming:
-            self._stream_widget = Static(self._body or "…", classes="stream-body", markup=False)
-            yield self._stream_widget
-        else:
-            yield Markdown(self._fix_markdown(self._body or "…"), classes="final-body")
+        self._body_widget = Static(
+            self._render_body(self._body or "…"),
+            classes="msg-body",
+        )
+        yield self._body_widget
 
     @staticmethod
     def _fix_markdown(text: str) -> str:
@@ -208,29 +213,38 @@ class AssistantBubble(Widget):
                     new_lines.append("|" + (" --- |" * cols))
         return "\n".join(new_lines)
 
+    def _render_body(self, body: str) -> Any:
+        """Build a Rich renderable for ``body`` (markdown, with a plain-text
+        fallback if the parser chokes on a partial chunk).
+
+        NOTE: must NOT be named ``_render`` — that shadows ``Widget._render``
+        which Textual calls (with no args) during paint.
+        """
+        text = body or "…"
+        try:
+            return RichMarkdown(self._fix_markdown(text), code_theme=_CODE_THEME)
+        except Exception:
+            return text
+
     def update_body(self, body: str) -> None:
-        """Cheap streaming update: refresh the Static widget only."""
+        """Streaming update: re-render the markdown into the same Static."""
         self._body = body
-        if self._stream_widget is None:
+        if self._body_widget is None:
             return
         try:
-            self._stream_widget.update(body or "…")
+            self._body_widget.update(self._render_body(body))
         except Exception:
             pass
 
     def finalize(self, reasoning: str, body: str) -> None:
-        """Stream complete: replace Static with a Markdown widget (or a Static
-        for plain error text if ``body`` came from an error path)."""
+        """Stream complete: render the final markdown one more time."""
         self._reasoning = reasoning
         self._body = body
         self._streaming = False
-        if self._stream_widget is None:
+        if self._body_widget is None:
             return
         try:
-            md = Markdown(self._fix_markdown(body or ""), classes="final-body")
-            self.mount(md, after=self._stream_widget)
-            self._stream_widget.remove()
-            self._stream_widget = None
+            self._body_widget.update(self._render_body(body or ""))
         except Exception:
             pass
 
